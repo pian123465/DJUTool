@@ -12,15 +12,20 @@
 1. 把整个文件夹复制到 Windows 上(任意目录都行,比如 `D:\shortdrama`)
 2. 双击 **`build.bat`**
 3. 等 3-5 分钟,看到 "构建完成!" 就 OK 了
-4. 产物在 `dist\shortdrama-dl.exe`(单文件,自带 Python 运行时,约 30 MB)
+4. 产物在 `dist\shortdrama-dl.exe`(单文件,自带 Python 运行时 + aria2c + ffmpeg,约 200 MB)
 5. 双击 `dist\shortdrama-dl.exe` 直接运行,**不需要再装 Python**
 
 ### build.bat 做了什么
 1. 检查 Python
 2. 创建虚拟环境 `.venv`
 3. 装 `pyinstaller` + 全部依赖(PyQt6 / aiohttp / yt-dlp / loguru / cryptography / requests)
-4. 用 `shortdrama.spec` 跑 PyInstaller → `dist\shortdrama-dl.exe`
-5. 如果系统装了 Inno Setup(`iscc`),顺便再生成 `installer_output\Setup-Shortdrama-0.3.exe`(可选)
+4. **检查** `assets\bin\` 下的 aria2c + ffmpeg(已直接随仓库一起发,本地优先,缺失才下)
+5. 用 `shortdrama.spec` 跑 PyInstaller → `dist\shortdrama-dl.exe`
+6. 如果系统装了 Inno Setup(`iscc`),顺便再生成 `installer_output\Setup-Shortdrama-0.3.exe`(可选)
+
+> ℹ️ v0.3 起,`assets/bin/` 下的 `aria2c.exe` + `ffmpeg.exe` + 必需的 dll 已经直接随仓库发布,
+> 打包时不再需要访问 BtbN/Gyan。Windows runner 在网络不好时也能稳定打包。
+> 若想升级 ffmpeg 版本,在 Windows 上跑 `python tools\setup_binaries.py --force --only-ffmpeg`。
 
 ### 想自己手动跑也 OK
 ```cmd

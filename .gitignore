@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+
+# Build
+build/
+dist/
+*.spec.bak
+
+# Database / runtime
+*.db
+*.sqlite
+*.sqlite3
+downloads/
+
+# 仓库自带 binaries.tar.gz(75MB,< 100MB 单文件限制以内),直接提交
+# setup_binaries.py 启动时会自动解压到本目录,然后删除压缩包
+# assets/bin/binaries.tar.gz
+#
+# 解压后产生的实际二进制也保留在工作树里(下次 build 用),
+# 但不强制提交 — 它们由压缩包生成,版本管理跟着 tar.gz 走
+# assets/bin/aria2c.exe
+# assets/bin/ffmpeg.exe
+# assets/bin/ffprobe.exe
+# assets/bin/*.dll
+#
+# 临时文件还是忽略(setup_binaries.py 跑下载时残留的 zip)
+assets/bin/_aria2.zip
+assets/bin/_ffmpeg.zip
+assets/bin/_*.tmp
+# 但保留 .gitkeep 让目录结构存在
+!assets/bin/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log

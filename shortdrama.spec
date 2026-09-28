@@ -31,14 +31,25 @@ datas = [
 ]
 
 # 外部二进制(aria2c + ffmpeg,如果 assets/bin/ 下存在则打包进去)
+# 注意:
+#   - BtbN shared 版 ffmpeg 需要同目录的 .dll(avcodec-63.dll 等),
+#     所以这里要把 .exe 和 .dll 都收集起来,统一打到 bin/ 下。
+#   - 仓库自带的 binaries.tar.gz(setup_binaries.py 启动时会自动解压)
+#     不应该被打包进 PyInstaller(它是压缩包不是可执行文件)。
+#   - 临时 zip 残留(_aria2.zip / _ffmpeg.zip / _*.tmp)也跳过。
 _bin_dir = os.path.join('assets', 'bin')
 binaries = []
 if os.path.isdir(_bin_dir):
     for fname in os.listdir(_bin_dir):
-        # 只打 .exe / 真正的可执行文件(过滤掉临时 zip 残留)
-        if fname.startswith('_') or not (fname.endswith('.exe') or fname in ('aria2c', 'ffmpeg')):
+        if fname.startswith('_'):  # _aria2.zip / _ffmpeg.zip / _*.tmp
             continue
-        binaries.append((os.path.join(_bin_dir, fname), 'bin'))
+        if fname.endswith('.tar.gz') or fname.endswith('.zip'):  # 仓库自带的压缩包
+            continue
+        # Windows:所有 .exe + .dll;POSIX:aria2c / ffmpeg 无后缀
+        is_win_binary = os.name == 'nt' and (fname.endswith('.exe') or fname.endswith('.dll'))
+        is_posix_binary = os.name != 'nt' and fname in ('aria2c', 'ffmpeg')
+        if is_win_binary or is_posix_binary:
+            binaries.append((os.path.join(_bin_dir, fname), 'bin'))
     if binaries:
         print(f"[spec] 将打包以下外部二进制到 bin/: {[os.path.basename(b[0]) for b in binaries]}")
 

@@ -68,20 +68,14 @@ if not exist "assets\icon.ico" (
     echo    图标已存在,跳过
 )
 
-REM 5. 下载 aria2c + ffmpeg(打进 .exe,让单文件自带下载能力)
-echo [4/7] 下载 aria2c + ffmpeg...
-if not exist "assets\bin\aria2c.exe" (
-    python tools\setup_binaries.py --only-aria2
+REM 5. 检查 aria2c + ffmpeg(已提交到仓库,本地优先,缺啥才下)
+echo [4/7] 检查 aria2c + ffmpeg...
+python tools\setup_binaries.py --status
+if errorlevel 1 (
+    echo [提示] 本地缺失,尝试下载(网络不稳可能失败)
+    python tools\setup_binaries.py
     if errorlevel 1 (
-        echo [X] 下载 aria2c 失败
-        pause
-        exit /b 1
-    )
-)
-if not exist "assets\bin\ffmpeg.exe" (
-    python tools\setup_binaries.py --only-ffmpeg
-    if errorlevel 1 (
-        echo [X] 下载 ffmpeg 失败
+        echo [X] 下载失败,请检查网络或手动放入 assets\bin\
         pause
         exit /b 1
     )
