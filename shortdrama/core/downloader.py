@@ -2,6 +2,8 @@
     1. aria2(推荐,断点续传/分片最强)
     2. yt-dlp(部分短剧源可能它已经支持)
     3. native(自研,aiohttp + ffmpeg HLS 合并)
+
+二进制(aria2c / ffmpeg)优先用打包内置的(随 .exe 分发),找不到再走 PATH。
 """
 from __future__ import annotations
 
@@ -17,6 +19,7 @@ from loguru import logger
 
 from .aria2_client import Aria2Client
 from .base import DownloadOptions, Episode
+from .binary_locator import ffmpeg_path
 
 
 class EngineKind(str, enum.Enum):
@@ -210,12 +213,13 @@ class DownloadEngine:
             await asyncio.gather(*(fetch(i, u) for i, u in enumerate(segs)))
 
         # ffmpeg 合并
-        if shutil.which("ffmpeg") is None:
-            raise RuntimeError("未找到 ffmpeg")
+        ff = ffmpeg_path()
+        if ff is None:
+            raise RuntimeError("未找到 ffmpeg(打包内 / 本地 / PATH 都没有)")
         list_file = ts_dir / "_list.txt"
         list_file.write_text("\n".join(f"file '{p.name}'" for p in sorted(ts_dir.glob("*.ts"))))
         subprocess.run(
-            ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(list_file),
+            [ff, "-y", "-f", "concat", "-safe", "0", "-i", str(list_file),
              "-c", "copy", str(target)],
             check=True, capture_output=True,
         )

@@ -30,10 +30,23 @@ datas = [
     ("shortdrama/plugins", "shortdrama/plugins"),  # 用户签名插件
 ]
 
+# 外部二进制(aria2c + ffmpeg,如果 assets/bin/ 下存在则打包进去)
+_bin_dir = os.path.join('assets', 'bin')
+binaries = []
+if os.path.isdir(_bin_dir):
+    for fname in os.listdir(_bin_dir):
+        # 只打 .exe / 真正的可执行文件(过滤掉临时 zip 残留)
+        if fname.startswith('_') or not (fname.endswith('.exe') or fname in ('aria2c', 'ffmpeg')):
+            continue
+        binaries.append((os.path.join(_bin_dir, fname), 'bin'))
+    if binaries:
+        print(f"[spec] 将打包以下外部二进制到 bin/: {[os.path.basename(b[0]) for b in binaries]}")
+
 # 隐藏导入(动态加载的模块)
 hiddenimports = [
     "shortdrama.core.aria2_client",
     "shortdrama.core.base",
+    "shortdrama.core.binary_locator",
     "shortdrama.core.downloader",
     "shortdrama.core.link_parser",
     "shortdrama.core.orchestrator",
@@ -57,7 +70,7 @@ hiddenimports = [
 a = Analysis(
     ['shortdrama/__main__.py'],
     pathex=[],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

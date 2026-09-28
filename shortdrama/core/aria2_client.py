@@ -3,6 +3,7 @@
 aria2c 是命令行下载工具,支持多线程、断点续传、HLS/M3U8、磁力链等。
 我们用 JSON-RPC 控制它(aria2c --enable-rpc 启动后监听 6800)。
 
+二进制路径查找:binary_locator(优先打包临时目录 → 本地 assets/bin → 系统 PATH)。
 不需要 aria2 时,DownloadEngine 会自动回落到自研引擎。
 """
 from __future__ import annotations
@@ -17,6 +18,8 @@ from urllib.parse import quote
 
 import requests
 from loguru import logger
+
+from .binary_locator import aria2_path
 
 
 class Aria2Client:
@@ -43,7 +46,8 @@ class Aria2Client:
     # ---------- 检测与启动 ----------
     @staticmethod
     def is_installed() -> bool:
-        return shutil.which("aria2c") is not None
+        """检查 aria2c 是否可用(打包内 / 本地 assets/bin / 系统 PATH 任何一处)。"""
+        return aria2_path() is not None
 
     def is_running(self) -> bool:
         try:
@@ -58,13 +62,13 @@ class Aria2Client:
     def start_daemon(self, downloads_dir: str = "./downloads") -> bool:
         """拉起一个 aria2c 后台进程(我们管理的,不要重复启)。"""
         if not self.is_installed():
-            logger.warning("未找到 aria2c,请先安装并加入 PATH")
+            logger.warning("未找到 aria2c(打包 / 本地 / PATH 都没有)")
             return False
         if self.is_running():
             return True
         Path(downloads_dir).mkdir(parents=True, exist_ok=True)
         cmd = [
-            "aria2c",
+            aria2_path(),
             "--enable-rpc=true",
             f"--rpc-listen-port={self.port}",
             f"--rpc-listen-all=false",
@@ -88,7 +92,7 @@ class Aria2Client:
         # 等 daemon 起来
         for _ in range(20):
             if self.is_running():
-                logger.info(f"aria2c 启动成功 -> {self.rpc_url}")
+                logger.info(f"aria2c 启动成功 -> {self.rpc_url} (binary={aria2_path()})")
                 return True
             time.sleep(0.2)
         return False
