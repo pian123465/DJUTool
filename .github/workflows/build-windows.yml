@@ -1,7 +1,7 @@
 name: Build Windows .exe
 
 on:
-  workflow_dispatch:  # 只在手动触发时运行
+  workflow_dispatch:
 
 jobs:
   build:
@@ -19,7 +19,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~\AppData\Local\pip\Cache
-          keys: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
 
       - name: 安装依赖
         run: |
@@ -27,7 +27,11 @@ jobs:
           pip install pyinstaller
           pip install -r requirements.txt
 
-      - name: 构建 .exe(PyInstaller)
+      - name: 下载 aria2c + ffmpeg
+        run: |
+          python tools/setup_binaries.py
+
+      - name: 构建 .exe
         run: pyinstaller shortdrama.spec --clean --noconfirm
 
       - name: 验证产物
