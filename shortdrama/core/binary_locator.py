@@ -24,7 +24,7 @@ LOCAL_BIN = REPO_ROOT / "assets" / "bin"
 
 
 def _bundled(name: str) -> Path | None:
-    """PyInstaller 打包后的临时目录。"""
+    """PyInstaller 打包后的临时目录(sys._MEIPASS)。"""
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
         p = Path(meipass) / "bin" / name
@@ -42,55 +42,47 @@ def _local(name: str) -> Path | None:
 
 
 def resolve_binary(name: str, *, fallback_to_path: bool = True) -> str | None:
-    """按优先级查找二进制:打包临时目录 → 本地 assets/bin → 系统 PATH。
+    """按优先级查找二进制。
 
     Args:
-        name: 如 "aria2c.exe" / "ffmpeg.exe"(Windows)或 "aria2c" / "ffmpeg"(POSIX)
-        fallback_to_path: 找不到本地时是否走 PATH
+        name: 完整可执行文件名,如 "aria2c.exe" / "ffmpeg.exe"(Windows)
+              或 "aria2c" / "ffmpeg"(POSIX)
+        fallback_to_path: 找不到本地时是否走系统 PATH
 
     Returns:
-        完整路径字符串或可执行文件名(给 subprocess 用),
+        完整路径字符串(给 subprocess 用)或 PATH 里的可执行文件名,
         完全找不到时返回 None。
     """
-    is_win = os.name == "nt"
-    # 优先:打包后的临时目录
+    # 1. 打包后的临时目录(单文件 .exe 启动时解压)
     p = _bundled(name)
     if p:
         return str(p)
-    # 次之:本地 assets/bin
+    # 2. 本地 assets/bin(开发用)
     p = _local(name)
     if p:
         return str(p)
-    # fallback:系统 PATH
+    # 3. 系统 PATH
     if fallback_to_path:
-        which = shutil.which(name) or shutil.which(name.removesuffix(".exe") if is_win else name)
+        which = shutil.which(name)
         if which:
             return which
     return None
 
 
+def _win_name(plain: str) -> str:
+    return f"{plain}.exe" if os.name == "nt" else plain
+
+
 def aria2_path() -> str | None:
-    """aria2c 可执行路径(.exe 后缀自动按 OS 判别)。"""
-    is_win = os.name == "nt"
-    for name in (("aria2c.exe", "aria2c") if is_win else ("aria2c", "aria2c.exe")):
-        p = resolve_binary(name)
-        if p:
-            return p
-    return None
+    """aria2c 可执行路径(跨平台后缀)。"""
+    return resolve_binary(_win_name("aria2c"))
 
 
 def ffmpeg_path() -> str | None:
-    """ffmpeg 可执行路径(.exe 后缀自动按 OS 判别)。"""
-    is_win = os.name == "nt"
-    for name in (("ffmpeg.exe", "ffmpeg") if is_win else ("ffmpeg", "ffmpeg.exe")):
-        p = resolve_binary(name)
-        if p:
-            return p
-    return None
+    """ffmpeg 可执行路径(跨平台后缀)。"""
+    return resolve_binary(_win_name("ffmpeg"))
 
 
 def is_installed(binary_name: str) -> bool:
-    """兼容旧 API:检查二进制是否可用。binary_name 不带 .exe。"""
-    is_win = os.name == "nt"
-    name = f"{binary_name}.exe" if is_win else binary_name
-    return resolve_binary(name) is not None
+    """兼容旧 API:检查二进制是否可用(传入 "aria2c" / "ffmpeg" 不带 .exe)。"""
+    return resolve_binary(_win_name(binary_name)) is not None
