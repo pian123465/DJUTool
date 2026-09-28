@@ -7,7 +7,7 @@
     python tools/setup_binaries.py --only-aria2    # 只下 aria2c
     python tools/setup_binaries.py --only-ffmpeg   # 只下 ffmpeg
 
-下载源(都基于 GitHub CDN 或稳定 mirror):
+下载源:
     aria2c: github.com/aria2/aria2/releases(官方 release zip)
     ffmpeg: github.com/BtbN/FFmpeg-Builds(主) + gyan.dev(备)
 """
@@ -82,26 +82,25 @@ def _download(url: str, dst: Path, chunk: int = 1 << 20, retries: int = 3) -> No
 
 
 def _extract_one(zip_path: Path, *, member_dir: str, filename: str, dst: Path) -> None:
-    """从 zip 里抽一个匹配的文件(member_dir 是目录子串,filename 是文件名)。
+    """从 zip 里抽一个匹配的文件(member_dir 是路径子串,filename 是文件名前缀)。
 
-    匹配规则:成员路径必须以 member_dir 结尾的目录段 + filename 开头
+    匹配规则:成员路径中必须包含 member_dir 子串,且文件名以 filename 开头。
     防止匹配到错误路径(比如 changelog 里出现文件名)。
     """
     print(f"  📦 解压 {zip_path.name} → {dst.name}")
     matches: list[str] = []
     with zipfile.ZipFile(zip_path) as zf:
         for member in zf.namelist():
-            # 匹配:<dir>/<filename> 或 <dir>/<filename>
-            # member_dir 用 '/' 分隔确保是完整目录段
-            parts = member.split("/")
-            if filename in parts and member_dir in "/".join(parts):
+            # 文件名以前缀匹配(容忍 .exe 后缀差异,如 'aria2c' 匹配 'aria2c.exe')
+            basename = member.rsplit("/", 1)[-1]
+            if basename.startswith(filename) and member_dir in member:
                 matches.append(member)
         if not matches:
             raise FileNotFoundError(
-                f"在 {zip_path.name} 里找不到 {member_dir!r} 下的 {filename!r}\n"
+                f"在 {zip_path.name} 里找不到 {member_dir!r} 下以 {filename!r} 开头的文件\n"
                 f"zip 内前 10 个成员: {zf.namelist()[:10]}"
             )
-        # 取最短路径(优先顶层 bin 目录下的文件)
+        # 取最短路径(优先顶层 bin 目录下的文件,跳过 extra/ 子目录)
         matches.sort(key=len)
         target_member = matches[0]
         with zf.open(target_member) as src, dst.open("wb") as out:
