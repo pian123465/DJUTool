@@ -3,7 +3,7 @@
 
 构建命令:
     pip install pyinstaller
-    pyinstaller shortdrama.spec --clean --noconfirm
+    python -X utf8 -m PyInstaller shortdrama.spec --clean --noconfirm
 
 输出:
     dist/shortdrama-dl.exe  (单文件,自带 Python 运行时)
@@ -12,6 +12,24 @@
 import os
 import sys
 from pathlib import Path
+
+# --- Windows runner 编码 fix(v0.6)============================================
+# GitHub Actions 的 windows runner 用 PowerShell 7,stdout 默认是 cp1252。
+# spec 本身是 Python 脚本,print 任何非 ASCII 字符都会 UnicodeEncodeError
+# 直接把整个 PyInstaller 构建搞挂(和 tools/setup_binaries.py 是同一个坑)。
+# 这里把 stdout/stderr 强制切 utf-8,errors="replace" 兜底。
+# 注意:本 spec 不能 import 项目内模块(构建时 sys.path 未必包含仓库根),
+# 所以这里保持自包含。
+for _stream_name in ("stdout", "stderr"):
+    _stream = getattr(sys, _stream_name, None)
+    if _stream is None:
+        continue
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass  # 老 Python / 非 CPython:跳过(下面的 print 全是 ASCII,照样安全)
+# ==============================================================================
+
 
 block_cipher = None
 
@@ -51,7 +69,10 @@ if os.path.isdir(_bin_dir):
         if is_win_binary or is_posix_binary:
             binaries.append((os.path.join(_bin_dir, fname), 'bin'))
     if binaries:
-        print(f"[spec] 将打包以下外部二进制到 bin/: {[os.path.basename(b[0]) for b in binaries]}")
+        # [v0.6] 这行原来是中文 print,cp1252 控制台下会 UnicodeEncodeError,
+        # 而它是 PyInstaller 构建期第一个 print -> 一崩整个 build 挂掉。
+        # 已改成纯 ASCII,不再依赖任何编码设置。
+        print(f"[spec] packing external binaries into bin/: {[os.path.basename(b[0]) for b in binaries]}")
 
 # 隐藏导入(动态加载的模块)
 hiddenimports = [

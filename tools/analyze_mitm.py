@@ -8,7 +8,7 @@
 依赖:pip install mitmproxy  (或只装这个脚本也行,纯 Python)
 
 用法:
-    python tools/analyze_mitm.py dump.flow > report.json
+    python -X utf8 tools/analyze_mitm.py dump.flow > report.json
 """
 from __future__ import annotations
 
@@ -17,6 +17,19 @@ import json
 import re
 import sys
 from pathlib import Path
+
+# --- Windows 控制台编码 fix(v0.6)============================================
+# 抓包分析经常在 Windows cmd / PowerShell 里跑,stdout 默认 cp1252 或 cp936,
+# print 中文会 UnicodeEncodeError 崩掉。统一先切 utf-8,下面 print 也全改 ASCII。
+for _stream_name in ("stdout", "stderr"):
+    _stream = getattr(sys, _stream_name, None)
+    if _stream is None:
+        continue
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass  # 老 Python / 非 CPython:跳过(print 全 ASCII,照样安全)
+# ==============================================================================
 
 # 短剧相关接口关键词
 DOMAIN_PATTERNS = re.compile(
@@ -38,7 +51,7 @@ def analyze_flow_file(path: Path) -> list[dict]:
     """分析 mitmproxy 的 .flow 文件(JSON Lines 格式)。"""
     results = []
     if not path.exists():
-        print(f"[!] 文件不存在: {path}", file=sys.stderr)
+        print(f"[X] file not found: {path}", file=sys.stderr)
         return results
 
     with path.open("r", encoding="utf-8", errors="ignore") as f:
@@ -96,22 +109,28 @@ def _parse_mitm_entry(entry: dict, idx: int) -> dict | None:
 
 
 def main():
-    ap = argparse.ArgumentParser(description="短剧平台抓包分析工具")
-    ap.add_argument("flow", type=Path, help="mitmproxy dump 文件(.flow)")
-    ap.add_argument("--out", type=Path, default=None, help="输出 JSON 报告")
+    ap = argparse.ArgumentParser(description="short-drama platform mitm capture analyzer")
+    # help / description 也必须是 ASCII:argparse 在 --help 时会把它 print 到 stdout,
+    # cp1252 控制台下中文 help 会 UnicodeEncodeError
+    ap.add_argument("flow", type=Path, help="mitmproxy dump file (.flow)")
+    ap.add_argument("--out", type=Path, default=None, help="write JSON report to this path")
     args = ap.parse_args()
 
-    print(f"[>] 读取 {args.flow} ...", file=sys.stderr)
+    print(f"[>] reading {args.flow} ...", file=sys.stderr)
     results = analyze_flow_file(args.flow)
-    print(f"[>] 命中短剧相关请求 {len(results)} 条", file=sys.stderr)
+    print(f"[>] {len(results)} short-drama related requests hit", file=sys.stderr)
 
     report = {"summary": {"total_hits": len(results)}, "requests": results}
     text = json.dumps(report, ensure_ascii=False, indent=2)
     if args.out:
         args.out.write_text(text, encoding="utf-8")
-        print(f"[>] 写入 {args.out}", file=sys.stderr)
+        print(f"[>] written to {args.out}", file=sys.stderr)
     else:
-        print(text)
+        # 直接落到 stdout 的报告:终端 / 重定向文件在 Windows 上可能是
+        # cp1252 或 cp936,写中文会 UnicodeEncodeError。
+        # 这里用 ensure_ascii=True 输出纯 ASCII(内容仍是合法 JSON,
+        # 中文变成 \uXXXX,反序列化后完全一样);写文件那条路保持 utf-8 不变。
+        print(json.dumps(report, ensure_ascii=True, indent=2))
 
 
 if __name__ == "__main__":

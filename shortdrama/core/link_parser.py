@@ -135,6 +135,18 @@ def parse_share_sync(text: str) -> ParsedLink | None:
 
 # ---------- 单元测试 ----------
 if __name__ == "__main__":
+    # 这个 demo 会 print 中文测试数据,cp1252 / cp936 控制台会 UnicodeEncodeError
+    # (打包后的 GUI 程序不走这里,console=False 时 sys.stdout 是 None,print 是空操作)
+    import sys
+    for _stream_name in ("stdout", "stderr"):
+        _stream = getattr(sys, _stream_name, None)
+        if _stream is None:
+            continue
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     import asyncio
     tests = [
         "[红果短剧] 龙王驾到 https://v.douyin.com/abc123/ 快来看",
@@ -144,7 +156,7 @@ if __name__ == "__main__":
     parser = LinkParser()
     for t in tests:
         url = LinkParser.extract_url(t)
-        print(f"text: {t}\n  → url: {url}")
+        print(f"text: {t}\n  -> url: {url}")
 
     # 解析逻辑(不需要网络)
     for u in [
@@ -152,4 +164,4 @@ if __name__ == "__main__":
         "https://www.douyin.com/video/7123456789012345678",
         "https://api.hema.example/drama/abc12345",
     ]:
-        print(f"final: {u}\n  → {LinkParser.parse(u)}")
+        print(f"final: {u}\n  -> {LinkParser.parse(u)}")

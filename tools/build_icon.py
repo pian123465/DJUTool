@@ -3,11 +3,25 @@
 需要:ImageMagick (convert) 或 Inkscape 已安装,本脚本会优先用 convert。
 
 用法:
-    python tools/build_icon.py
+    python -X utf8 tools/build_icon.py
 """
 from pathlib import Path
 import subprocess
 import sys
+
+# --- Windows 控制台编码 fix(v0.6)============================================
+# 双击 cmd / CI 里跑本脚本时,stdout 可能是 cp1252 或 cp936,
+# print 中文或 "✓"(U+2713,cp936 里没有这个码位)会 UnicodeEncodeError 崩掉。
+# 统一先切 utf-8 + errors="replace",下面所有 print 也都改成纯 ASCII。
+for _stream_name in ("stdout", "stderr"):
+    _stream = getattr(sys, _stream_name, None)
+    if _stream is None:
+        continue
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass  # 老 Python / 非 CPython:跳过(print 全 ASCII,照样安全)
+# ==============================================================================
 
 HERE = Path(__file__).parent.parent
 ASSETS = HERE / "assets"
@@ -42,7 +56,7 @@ def render_via_pillow(svg: Path) -> list[Path]:
         from io import BytesIO
         from PIL import Image
     except ImportError:
-        print("需要 cairosvg + Pillow", file=sys.stderr)
+        print("need cairosvg + Pillow", file=sys.stderr)
         raise
     raw = svg.read_bytes()
     out = []
@@ -56,18 +70,18 @@ def render_via_pillow(svg: Path) -> list[Path]:
 
 def main():
     if not SVG.exists():
-        print(f"找不到 {SVG}", file=sys.stderr)
+        print(f"[X] svg not found: {SVG}", file=sys.stderr)
         sys.exit(1)
 
     # 优先 ImageMagick
     try:
         pngs = render_via_convert(SVG)
     except (FileNotFoundError, subprocess.CalledProcessError):
-        print("ImageMagick 失败,试 cairosvg ...")
+        print("[WARN] ImageMagick failed, trying cairosvg ...")
         pngs = render_via_pillow(SVG)
 
     pack_ico(pngs, ICO)
-    print(f"✓ {ICO} ({ICO.stat().st_size // 1024} KB)")
+    print(f"[OK] {ICO} ({ICO.stat().st_size // 1024} KB)")
 
 
 if __name__ == "__main__":

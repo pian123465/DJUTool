@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # Linux/macOS 本地开发构建(仅打包源码 zip,真正 .exe 必须在 Windows 上构建)
+#
+# v0.6:export PYTHONIOENCODING/PYTHONUTF8,保证本机 locale 再怪也不会 UnicodeEncodeError
+
+export PYTHONIOENCODING=utf-8
+export PYTHONUTF8=1
 
 set -e
 echo "========================================="
-echo " 短剧下载器 - 源码打包脚本"
+echo " Short Drama Downloader - source packaging"
 echo "========================================="
 
 # 清理缓存
@@ -16,9 +21,9 @@ zip -rq shortdrama-dl-source.zip . \
     -x "*.db" ".git/*" "node_modules/*"
 
 echo
-echo "✓ 源码包:shortdrama-dl-source.zip"
+echo "[OK] source zip: shortdrama-dl-source.zip"
 echo
-echo "在 Windows 上构建 .exe 的步骤:"
-echo "  1. 解压源码到 Windows 11"
-echo "  2. 双击 build.bat"
-echo "  3. 等待 1-3 分钟,产出 dist\\shortdrama-dl.exe"
+echo "To build the .exe on Windows:"
+echo "  1. unzip the source on Windows 11"
+echo "  2. double-click build.bat"
+echo "  3. wait 1-3 min, output dist\\shortdrama-dl.exe"
