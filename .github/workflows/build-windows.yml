@@ -1,46 +1,156 @@
 name: Build Windows .exe
 
+# [v0.8] 整套流程的设计前提:**仓库里没有任何大文件**。
+#   - 源码只有 ~400KB,网页上传 / git push 都毫无压力
+#   - aria2c + ffmpeg 由 CI 现下(实测 4 秒),并用 actions/cache 缓存下来
+#   - 最终 exe(约 198MB)走 GitHub Release 附件,而不是 Actions artifact
+#     (artifact 90 天过期 + 下载要登录;Release 永久 + 免登录 + 单文件上限 2GB)
+
 on:
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "构建成功后发布到 GitHub Release(推荐勾上)"
+        type: boolean
+        default: true
+      release_tag:
+        description: 'Release 标签;留空则自动读仓库根的 VERSION 文件'
+        type: string
+        default: ''
+
+# 发 Release 必须有写权限。仓库默认给的 GITHUB_TOKEN 只有 read,
+# 不显式声明的话 gh release create 会 403。
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: windows-latest
 
+    # === Windows runner 编码 fix(v0.6)========================================
+    # PowerShell 7 (pwsh) 的 stdout 在 runner 上是 cp1252,
+    # 任何 Python 脚本 print 中文/emoji 都会 UnicodeEncodeError 把 step 搞挂
+    # (build #8 就是这么死的)。四层保险,任何一层生效就不会再炸:
+    #   1. job 级 env            —— python 启动即生效
+    #   2. step 里 $env:         —— step 级兜底
+    #   3. python -X utf8        —— 命令行参数,env 丢了也有效
+    #   4. 脚本内 reconfigure    —— tools/setup_binaries.py 自己做
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: "1"
+    # =========================================================================
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: 设置 Python
+      # [v0.6] 编码护栏:构建路径上的脚本不允许 print 非 ASCII。
+      # 故意放第一步 —— 早失败、报错清楚,比 PyInstaller 跑一半炸掉强。
+      - name: Guard - no non-ASCII print in build scripts
+        shell: pwsh
+        run: |
+          $env:PYTHONIOENCODING = 'utf-8'
+          $env:PYTHONUTF8 = '1'
+          python -X utf8 tools/check_ascii_prints.py
+
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: 缓存 pip
+      - name: Cache pip
         uses: actions/cache@v4
         with:
           path: ~\AppData\Local\pip\Cache
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
 
-      - name: 安装依赖
+      # [v0.8] 缓存二进制:第一次构建下完 86MB,之后全部命中缓存,
+      # 构建不再依赖 BtbN/gyan 外网(实测主源可用,但 gyan 经常 503)。
+      - name: Cache binaries (aria2c + ffmpeg)
+        uses: actions/cache@v4
+        with:
+          path: assets/bin
+          key: win-bin-v3-aria2-1.37.0-ffmpeg-gpl-shared
+          restore-keys: |
+            win-bin-
+
+      - name: Install dependencies
+        shell: pwsh
         run: |
+          $env:PYTHONIOENCODING = 'utf-8'
+          $env:PYTHONUTF8 = '1'
           python -m pip install --upgrade pip
           pip install pyinstaller
           pip install -r requirements.txt
 
-      - name: 下载 aria2c + ffmpeg
+      # binaries.tar.gz 依然是可选的:放了就直接解压,没放就现下。
+      - name: Fetch and check binaries (aria2c + ffmpeg)
+        shell: pwsh
         run: |
-          python tools/setup_binaries.py
+          $env:PYTHONIOENCODING = 'utf-8'
+          $env:PYTHONUTF8 = '1'
+          python -X utf8 tools/setup_binaries.py
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "[ERROR] binary preparation failed - see the log above for which mirror failed"
+            exit 1
+          }
 
-      - name: 构建 .exe
-        run: pyinstaller shortdrama.spec --clean --noconfirm
-
-      - name: 验证产物
+      # 用 python -X utf8 -m PyInstaller 而不是 pyinstaller 控制台脚本,
+      # 因为 shortdrama.spec 里也有 print(cp1252 下中文会炸)。
+      - name: Build .exe (PyInstaller)
+        shell: pwsh
         run: |
-          dir dist\shortdrama-dl.exe
+          $env:PYTHONIOENCODING = 'utf-8'
+          $env:PYTHONUTF8 = '1'
+          python -X utf8 -m PyInstaller shortdrama.spec --clean --noconfirm
 
-      - name: 上传构建产物
+      - name: Verify artifact
+        shell: pwsh
+        run: |
+          if (-not (Test-Path dist\shortdrama-dl.exe)) {
+            Write-Error "[ERROR] dist\shortdrama-dl.exe was not produced"
+            exit 1
+          }
+          $mb = [math]::Round((Get-Item dist\shortdrama-dl.exe).Length / 1MB, 1)
+          Write-Host "[OK] dist\shortdrama-dl.exe = $mb MB"
+          if ($mb -lt 50) {
+            Write-Error "[ERROR] exe is only $mb MB - binaries are probably missing"
+            exit 1
+          }
+
+      # Actions artifact 仍然上传一份:方便当次构建留档 / 排查,
+      # 但它 90 天过期、下载要登录,所以不是对外分发的主渠道。
+      - name: Upload artifact (expires in 90 days)
         uses: actions/upload-artifact@v4
         with:
           name: shortdrama-dl-windows
           path: dist\shortdrama-dl.exe
           if-no-files-found: error
+          retention-days: 90
+
+      # [v0.8] 真正的分发渠道:GitHub Release 附件。
+      #   - 永久保存,不会 90 天过期
+      #   - 免登录直接下载(公开仓库任何人点链接就能下)
+      #   - 单文件上限 2GB,198MB 的 exe 绰绰有余
+      # gh 是 runner 自带的,不用额外装,也不用引第三方 action。
+      - name: Publish to GitHub Release
+        if: ${{ inputs.publish_release }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = '${{ inputs.release_tag }}'
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            $tag = 'v' + (Get-Content VERSION -Raw).Trim()
+          }
+          Write-Host "[REL] publishing as tag = $tag"
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag 'dist/shortdrama-dl.exe' `
+              --title "Short Drama Downloader $tag (Windows x64)" `
+              --generate-notes
+          } else {
+            # 同一个版本重跑构建:覆盖旧附件,不新建 tag
+            gh release upload $tag 'dist/shortdrama-dl.exe' --clobber
+            Write-Host "[REL] replaced the asset of existing release $tag"
+          }
+          Write-Host "[REL] done -> https://github.com/${{ github.repository }}/releases/tag/$tag"
