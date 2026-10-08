@@ -76,6 +76,7 @@ if os.path.isdir(_bin_dir):
 
 # 隐藏导入(动态加载的模块)
 hiddenimports = [
+    "shortdrama.ui",                 # v0.7:入口 __main__.py 用绝对 import 引它,显式列出来兜底
     "shortdrama.core.aria2_client",
     "shortdrama.core.base",
     "shortdrama.core.binary_locator",

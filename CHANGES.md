@@ -1,4 +1,119 @@
-# v0.6 - 把「cp1252 打印中文崩溃」这一类问题整个封死
+# v0.8 - 去掉 75MB 二进制包,exe 改走 GitHub Release
+
+> **这一版是给"GitHub 上传不了大文件"这个卡点解套的。**
+> v0.6/v0.7 修的是崩溃,这一版改的是**分发方式本身**。
+
+---
+
+## 为什么以前传不上去
+
+GitHub 网页上传单文件 **25MB** 上限,而 v0.5~v0.7 的包里带着
+`assets/bin/binaries.tar.gz`,**75MB** —— 网页直接拒绝,`git push` 虽然能过
+(上限 100MB)但也不该把二进制塞进 git。
+
+然后回头看你那次成功的构建日志,发现一件事:
+
+```
+[DL] https://github.com/BtbN/.../ffmpeg-master-latest-win64-gpl-shared.zip
+    [try 1/3] 100% 86735 / 86735 KB        <- 86MB,4 秒
+[OK] all binaries ready.
+```
+
+**Actions runner 自己从 GitHub CDN 下只要 4 秒。** 那个 75MB 的包
+解决的是一个不存在的问题,却制造了一个把你卡住的流程问题。
+
+---
+
+## v0.8 改了什么
+
+### 1. 仓库里彻底没有大文件了
+- 交付包 **76MB → 426KB / 41 个文件**,网页上传、git push 都毫无压力
+- `.gitignore` 恢复忽略 `assets/bin/*.exe` / `*.dll` / `binaries.tar.gz`
+- `setup_binaries.py` 仍然支持本地放包(离线构建用),但默认走下载
+- 新增 `SHORTDRAMA_KEEP_BUNDLE=1`:解压后保留压缩包,本地反复用
+
+### 2. workflow 加了二进制缓存
+```yaml
+- name: Cache binaries (aria2c + ffmpeg)
+  uses: actions/cache@v4
+  with:
+    path: assets/bin
+    key: win-bin-v3-aria2-1.37.0-ffmpeg-gpl-shared
+```
+第一次下完存缓存,之后构建**不再依赖外网**(实测主源 BtbN 可用,
+备用源 gyan.dev 当前 503,所以更不能指望它)。
+
+### 3. ⭐ exe 改走 GitHub Release(这才是正解)
+```
+Actions artifact : 90 天过期 + 下载要登录  →  只当构建留档
+GitHub Release   : 永久 + 免登录 + 2GB 上限 →  对外分发主渠道
+```
+workflow 新增 `publish_release` / `release_tag` 两个输入,构建成功后自动
+`gh release create/upload`(用 runner 自带的 gh,没引第三方 action)。
+tag 默认读仓库根的 `VERSION` 文件;同 tag 重跑是**覆盖**附件,不会堆重复版本。
+
+需要 `permissions: contents: write`(仓库默认只给 read,不写会 403)。
+
+### 4. ⭐ 修掉一个定时炸弹:ffmpeg DLL 写死版本号
+```python
+# v0.5 ~ v0.7
+is_btbn_shared = any("bin/avcodec-63.dll" in n for n in names)
+FFMPEG_REQUIRED_DLLS = ("avcodec-63.dll", "swscale-10.dll", ...)
+```
+下载源是 **master-latest 滚动包**,而 dll 名带 ffmpeg 大版本号。
+我拉了 BtbN 最新包的真实目录核对(今天还是 avcodec-63,暂时没事),
+但**ffmpeg 一旦发 8.x 就变 avcodec-64 / swscale-11**,
+上面两行直接失配 → `unknown ffmpeg zip structure` → 构建挂,而且你完全不知道是谁的锅。
+
+v0.8 改成**纯内容驱动**,不看 URL 也不写死版本号:
+- `bin/` 里有 `avcodec-*.dll` → shared 版,exe + **全部 dll** 一起抽
+- 只有 exe 没有 dll → static 版,只抽 exe
+
+### 5. 下载细节
+- 进度日志每 5% 打一行(之前每 1MB 一行,86MB 能刷 80 多行)
+- 断流检测(实际收到的字节 < Content-Length 时明确报错)
+- 失败信息列出试过的所有 URL + 明确说明"这是外网问题,重跑即可"
+- skip 判定加一层:小 exe(<5MB)+ 零 dll = 残缺的 shared 版,自动重下
+
+---
+
+## 验证
+
+`tools/setup_binaries.py` 离线单元测试(用构造的假 zip,不联网):
+
+| 场景 | 结果 |
+|---|---|
+| ffmpeg 7.x(avcodec-63,当前线上) | ✅ 10 个文件全解出,二次调用幂等 |
+| **ffmpeg 8.x(avcodec-64 / swscale-11)** | ✅ 全解出 —— **老代码在这里必炸** |
+| static 版(Gyan,无 dll) | ✅ 只解出 ffmpeg.exe |
+| shared 版只有 exe、dll 缺失 | ✅ 自动识别并重下 |
+| 状态输出的文件名 | ✅ 全部能 stat(不会 KeyError) |
+
+外加 13 项回归全绿(cp1252 编码模拟 / 冻结入口 / workflow YAML / guard 脚本等),
+其中 `check_ascii_prints.py` 对 41 个文件扫描无命中。
+
+---
+
+## 现在的完整流程
+
+```
+源码(426KB) → git push → Actions 手动触发 → 自动下载+缓存二进制
+            → PyInstaller 出 198MB exe → 自动发到 GitHub Release
+            → 用户从 /releases 免登录下载,永久有效
+```
+
+详细操作步骤见 **`UPLOAD_GUIDE.md`**。
+
+---
+
+# v0.7(存档)- 修 exe 双击即崩(相对 import)
+
+> v0.6 修的是**构建期**崩溃(UnicodeEncodeError),构建绿了、artifact 也传上去了,
+> 但打包出来的 exe **一双击就死**。这一版修的是**运行期**第一个坑。
+
+---
+
+# v0.6(已被 v0.7 取代,保留存档)- 把「cp1252 打印中文崩溃」这一类问题整个封死
 
 > 上一版 v0.5 只修了 `tools/setup_binaries.py` 一个入口。
 > v0.6 复盘了 build 日志,发现**同一个坑还有第二个入口(shortdrama.spec)**,
@@ -204,6 +319,71 @@ git push
 | `tools/analyze_mitm.py` | reconfigure + print/help ASCII 化 + stdout 报告 `ensure_ascii=True` |
 | `shortdrama/core/link_parser.py` | 自测块 reconfigure + `→` → `->` |
 | `build.bat` / `build.sh` | python 调用加 `-X utf8`,echo/注释 ASCII 化 |
+| `shortdrama/__main__.py` ⭐ v0.7 | 相对 import → 绝对 import(修 exe 双击即崩) |
+| `shortdrama.spec` | v0.7 hiddenimports 补 `shortdrama.ui` |
 
 体积/时间:仓库 75 MB(不变,`binaries.tar.gz` 本次没动),workflow 3-8 分钟,
 最终 exe ~200 MB(不变)。
+
+---
+
+# v0.7 - exe 双击即崩:`attempted relative import with no known parent package`
+
+## 症状
+
+```
+Unhandled exception in script
+Failed to execute script '__main__' due to unhandled exception:
+ImportError: attempted relative import with no known parent package
+  <most recent call last>
+  main_.py, line 2, in <module>
+or: attempted relative import with no known parent package
+```
+
+## 原因
+
+`shortdrama/__main__.py` 第 2 行是**相对 import**:
+
+```python
+from .ui import main
+```
+
+PyInstaller 打包时把这个文件当作**入口脚本**执行(bundle 里它的名字就叫
+`__main__.py`,不是 `shortdrama.__main__`),**没有包上下文**,
+所以 `__package__` 是空的,运行期一执行这行就 ImportError。
+
+阴险的地方在于它**三重都能骗过去**:
+
+| 场景 | 结果 | 为什么骗过去 |
+|---|---|---|
+| `python -m shortdrama` 本地开发 | ✅ 正常 | 这个场景 `__package__='shortdrama'` |
+| `pyinstaller` 构建 | ✅ 通过 | **分析阶段**能解析相对 import,模块全收进 PYZ |
+| exe 双击运行 | ❌ 崩 | 只有运行期才丢包上下文 |
+
+## 修复
+
+`shortdrama/__main__.py` 改成**绝对 import**(`from shortdrama.ui import main`),
+非冻结环境下补一段 `sys.path` 兜底,让 `python shortdrama/__main__.py` 直跑也能用。
+`ui.py` / `core/*.py` 里的相对 import **不用动** —— 它们是作为 `shortdrama.*`
+被导入的,包上下文一直都在。
+
+`shortdrama.spec` 的 hiddenimports 里补一行 `shortdrama.ui`,显式声明这个依赖。
+
+## 验证
+
+用 zipapp 精确模拟冻结后的 PYZ 环境(入口在归档根 + 包在归档内):
+
+| | 旧版入口 | v0.7 入口 |
+|---|---|---|
+| zipapp 启动 | ❌ `ImportError: attempted relative import...` | ✅ ui 导入成功,main() 跑完 |
+
+另外顺手审计了另外两个高频运行时雷点,**都没问题**:
+- `binary_locator.py` 找二进制走 `sys._MEIPASS/bin/`,和 spec 里 `bin/` 的目标路径对得上 ✅
+- 下载目录 `./downloads`、数据库 `./shortdrama_tasks.db` 都基于 cwd(用户启动目录),
+  不是 `__file__`,重启不丢 ✅
+
+## 注意
+
+v0.7 只改了 `shortdrama/__main__.py` + `shortdrama.spec` 两个**文本文件**,
+`assets/bin/binaries.tar.gz` 没动 —— 如果你还没推 workflow + tar.gz,
+这次一起推就行,还是用 hotfix zip(不重复推 75MB)。
