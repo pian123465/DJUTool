@@ -20,6 +20,10 @@ on:
 
 # 发 Release 必须有写权限。仓库默认给的 GITHUB_TOKEN 只有 read,
 # 不显式声明的话 gh release create 会 403。
+# [v0.8.1] action 主版本全部升到 Node 24 运行时,消除
+# "Node.js 20 is deprecated" 警告:
+#   checkout@v5 / setup-python@v6 / cache@v5 / upload-artifact@v6
+# (upload-artifact 必须到 v6,v5 仍是 node20)
 permissions:
   contents: write
 
@@ -41,7 +45,7 @@ jobs:
     # =========================================================================
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # [v0.6] 编码护栏:构建路径上的脚本不允许 print 非 ASCII。
       # 故意放第一步 —— 早失败、报错清楚,比 PyInstaller 跑一半炸掉强。
@@ -53,12 +57,12 @@ jobs:
           python -X utf8 tools/check_ascii_prints.py
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
       - name: Cache pip
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~\AppData\Local\pip\Cache
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
@@ -66,7 +70,7 @@ jobs:
       # [v0.8] 缓存二进制:第一次构建下完 86MB,之后全部命中缓存,
       # 构建不再依赖 BtbN/gyan 外网(实测主源可用,但 gyan 经常 503)。
       - name: Cache binaries (aria2c + ffmpeg)
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: assets/bin
           key: win-bin-v3-aria2-1.37.0-ffmpeg-gpl-shared
@@ -120,7 +124,7 @@ jobs:
       # Actions artifact 仍然上传一份:方便当次构建留档 / 排查,
       # 但它 90 天过期、下载要登录,所以不是对外分发的主渠道。
       - name: Upload artifact (expires in 90 days)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: shortdrama-dl-windows
           path: dist\shortdrama-dl.exe
