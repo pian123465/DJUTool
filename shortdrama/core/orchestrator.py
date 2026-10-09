@@ -20,8 +20,14 @@ class SearchOrchestrator:
 
         async def _run(p: BasePlatform):
             try:
-                async for d in p.search(keyword, page=page):
-                    await queue.put(d)
+                res = p.search(keyword, page=page)
+                if asyncio.iscoroutine(res):          # 平台返回协程(未实现分页流)
+                    item = await res
+                    if item is not None:
+                        await queue.put(item)
+                else:                                  # 平台返回异步生成器(逐条产出)
+                    async for d in res:
+                        await queue.put(d)
             except NotImplementedError:
                 logger.warning(f"[{p.name}] 尚未接入")
             except Exception as e:

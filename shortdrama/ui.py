@@ -133,6 +133,37 @@ class DownloadWorker(QThread):
             self.failed.emit(self.task_id, str(e))
 
 
+class LinkParseWorker(QThread):
+    """分享链接解析后台线程:解析重定向 + 拉剧集,全程不阻塞 GUI。"""
+    result_ready = pyqtSignal(object, object, object)  # parsed, drama, eps
+
+    def __init__(self, resolver: ShareResolver, text: str):
+        super().__init__()
+        self.resolver = resolver
+        self.text = text
+
+    def run(self):
+        parsed, drama, eps = None, None, []
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                parsed, drama = loop.run_until_complete(self.resolver.resolve(self.text))
+                if drama:
+                    platform = next(
+                        (p for p in self.resolver.platforms
+                         if any(d in parsed.platform or d in parsed.domain for d in p.url_domains)),
+                        None,
+                    )
+                    if platform:
+                        eps = loop.run_until_complete(platform.get_episodes(drama))
+            finally:
+                loop.close()
+        except Exception as e:  # noqa: BLE001
+            parsed = e
+        self.result_ready.emit(parsed, drama, list(eps))
+
+
 # ====================================================================
 #  基础组件
 # ====================================================================
@@ -720,7 +751,7 @@ class SearchPage(QWidget):
         self._panels = []
         for i, (t, tag, m, g, en, data) in enumerate(panels):
             card = PosterCard(t, tag, m, g, en)
-            card.clicked.connect(lambda _, d=data: self._on_pick(d))
+            card.clicked.connect(lambda d=data: self._on_pick(d))
             self._panels.append(card)
         QTimer.singleShot(0, self._relayout)
 
@@ -1016,20 +1047,23 @@ class LinkPage(QWidget):
     def _parse(self, text: str):
         self.result_card.setVisible(True)
         self.result_title.setText("解析中…")
-        self.result_meta.setText("正在跟随重定向并提取剧集 ID…")
+        self.result_meta.setText("正在跟随重定向并提取剧集 ID…(后台线程执行,不卡界面)")
+        self.btn_parse.setEnabled(False)
+        self.btn_paste.setEnabled(False)
+        self._worker = LinkParseWorker(self.resolver, text)
+        self._worker.result_ready.connect(self._finish_parse)
+        self._worker.start()
 
-        async def _do():
-            return await self.resolver.resolve(text)
+    def _finish_parse(self, parsed, drama, eps):
+        self.btn_parse.setEnabled(True)
+        self.btn_paste.setEnabled(True)
 
-        try:
-            loop = asyncio.new_event_loop()
-            try:
-                parsed, drama = loop.run_until_complete(_do())
-            finally:
-                loop.close()
-        except Exception as e:  # noqa: BLE001
+        if isinstance(parsed, Exception):
+            self.ep_list.clear()
+            self.current_drama = None
+            self.current_eps = []
             self.result_title.setText("解析出错")
-            self.result_meta.setText(str(e))
+            self.result_meta.setText(str(parsed))
             self.btn_enqueue.setVisible(False)
             self.btn_sel_all.setVisible(False)
             self.ep_list.setVisible(False)
@@ -1037,7 +1071,7 @@ class LinkPage(QWidget):
 
         self.ep_list.clear()
         self.current_drama = drama
-        self.current_eps = []
+        self.current_eps = list(eps) if eps else []
 
         if not parsed or not parsed.url:
             self.result_title.setText("未识别到链接")
@@ -1061,32 +1095,22 @@ class LinkPage(QWidget):
             self.result_meta.setText(
                 f"已识别 · {drama.platform} · {drama.episode_count} 集 · 链接已跟随重定向"
             )
-            self.result_thumb = None  # 保持占位
-            try:
-                loop2 = asyncio.new_event_loop()
-                try:
-                    platform = next(
-                        (p for p in self.resolver.platforms
-                         if any(d in parsed.platform or d in parsed.domain for d in p.url_domains)),
-                        None,
-                    )
-                    if platform:
-                        eps = loop2.run_until_complete(platform.get_episodes(drama))
-                        self.current_eps = eps
-                        for ep in eps:
-                            item = QListWidgetItem(f"第{ep.index}集 · {ep.title}")
-                            item.setSizeHint(item.sizeHint())
-                            item.setData(Qt.ItemDataRole.UserRole, ep)
-                            self.ep_list.addItem(item)
-                        self.ep_list.setVisible(True)
-                        self.sec_count.setText(f"{len(eps)} 集")
-                        self.btn_sel_all.setVisible(True)
-                        self.btn_enqueue.setVisible(True)
-                        self.btn_enqueue.setText(f"加入队列({len(eps)} 集)")
-                finally:
-                    loop2.close()
-            except Exception as e:  # noqa: BLE001
-                self.result_meta.setText(f"已识别链接,但拉剧集失败:{e}")
+            if self.current_eps:
+                for ep in self.current_eps:
+                    item = QListWidgetItem(f"第{ep.index}集 · {ep.title}")
+                    item.setSizeHint(item.sizeHint())
+                    item.setData(Qt.ItemDataRole.UserRole, ep)
+                    self.ep_list.addItem(item)
+                self.ep_list.setVisible(True)
+                self.sec_count.setText(f"{len(self.current_eps)} 集")
+                self.btn_sel_all.setVisible(True)
+                self.btn_enqueue.setVisible(True)
+                self.btn_enqueue.setText(f"加入队列({len(self.current_eps)} 集)")
+            else:
+                self.ep_list.setVisible(False)
+                self.sec_count.setText("0 集")
+                self.btn_sel_all.setVisible(False)
+                self.btn_enqueue.setVisible(False)
         else:
             self.result_title.setText("已识别链接(平台适配器未接入)")
             self.result_meta.setText(
@@ -1378,12 +1402,12 @@ class TasksPage(QWidget):
         running = [t for t in tasks if t.status == "downloading"]
         if running:
             for t in running:
-                self.store.update_status(t.id, "paused")
+                self.store.update_task(t.id, status="paused")
             self.btn_pause_all.setText("全部继续")
         else:
             paused = [t for t in tasks if t.status == "paused"]
             for t in paused:
-                self.store.update_status(t.id, "downloading")
+                self.store.update_task(t.id, status="downloading")
             self.btn_pause_all.setText("全部暂停")
         self.refresh()
 
@@ -1489,7 +1513,7 @@ class DonePage(QWidget):
             colors = _palette_pair(title)
             sub = f"{len(eps)} 集 · {sum(e.done_size for e in eps)/1073741824:.2f} GB"
             card = PosterCard(title, f"{len(eps)}集", sub, colors, en="COMPLETED")
-            card.clicked.connect(lambda _, t=title: self._open_folder(t))
+            card.clicked.connect(lambda t=title: self._open_folder(t))
             self._cards.append(card)
         self._relayout()
 
@@ -1566,6 +1590,7 @@ class SettingsPage(QWidget):
         self.spin_seg.setValue(int(SETTINGS.value("segments", 8)))
         dll.addWidget(self._row("单任务分片", self.spin_seg))
         save_val = QLabel(str(SETTINGS.value("save_dir", "./downloads")))
+        self.save_val = save_val
         save_row = self._row("保存位置", save_val)
         btn_change = make_secondary("更改")
         btn_change.clicked.connect(self._pick_dir)
@@ -1618,9 +1643,11 @@ class SettingsPage(QWidget):
                                    index=0 if SETTINGS.value("theme", "light") == "light" else 1)
         self.theme_picker.changed.connect(self._on_theme_pick)
         al.addWidget(self._row("主题", self.theme_picker))
-        self.tg_anim = Toggle(True)
-        al.addWidget(self._row("界面动画", self.tg_anim))
-        self.tg_update = Toggle(True)
+        self.tg_anim = Toggle(SETTINGS.value("anim", True, type=bool))
+        self.tg_anim.toggled.connect(lambda v: SETTINGS.setValue("anim", v))
+        al.addWidget(self._row("界面动画(页面淡入/主题过渡)", self.tg_anim))
+        self.tg_update = Toggle(SETTINGS.value("check_update", True, type=bool))
+        self.tg_update.toggled.connect(lambda v: SETTINGS.setValue("check_update", v))
         al.addWidget(self._row("启动时检查更新", self.tg_update))
         lay.addWidget(ap_box)
 
@@ -1695,6 +1722,7 @@ class SettingsPage(QWidget):
         d = QFileDialog.getExistingDirectory(self, "选择保存位置", SETTINGS.value("save_dir", "./downloads"))
         if d:
             SETTINGS.setValue("save_dir", d)
+            self.save_val.setText(d)
 
     def _on_theme_pick(self, i: int):
         self.theme_changed.emit("light" if i == 0 else "dark")
@@ -1723,6 +1751,9 @@ class MainWindow(QMainWindow):
         self.tasks_page = TasksPage(self.task_store)
         self.done_page = DonePage(self.task_store)
         self.settings_page = SettingsPage()
+
+        self._fade_anim = None      # 页面淡入单例动画,防止快速连点崩溃
+        self._theme_anim = None     # 主题切换过渡动画(交叉淡出)
 
         self.search_page.drama_selected.connect(self._on_drama_selected)
         self.link_page.drama_loaded.connect(self._on_drama_selected)
@@ -1809,7 +1840,7 @@ class MainWindow(QMainWindow):
             sv.addWidget(sec_lbl)
             for ico, text, badge, idx in items:
                 item = NavItem(ico, text, badge)
-                item.clicked.connect(lambda _, k=idx: self._switch_page(k))
+                item.clicked.connect(lambda k=idx: self._switch_page(k))
                 sv.addWidget(item)
                 self.nav_items.append(item)
         sv.addStretch(1)
@@ -1975,20 +2006,35 @@ class MainWindow(QMainWindow):
             self.tasks_page.refresh()
         if idx == 3:
             self.done_page.refresh()
-        # 淡入
-        self._fade_in(self.stack.currentWidget())
+        # 淡入(可在设置里关闭)
+        if SETTINGS.value("anim", True, type=bool):
+            self._fade_in(self.stack.currentWidget())
+        elif self.stack.currentWidget().graphicsEffect() is not None:
+            self.stack.currentWidget().setGraphicsEffect(None)
 
     def _fade_in(self, w: QWidget):
-        from PyQt6.QtWidgets import QGraphicsOpacityEffect
+        # 单例动画:快速连点时先停掉上一个,避免动画引用已被删除的 effect 造成段错误
+        if self._fade_anim is not None:
+            self._fade_anim.stop()
+            self._fade_anim = None
+        if w.graphicsEffect() is not None:
+            w.setGraphicsEffect(None)
         eff = QGraphicsOpacityEffect(w)
         w.setGraphicsEffect(eff)
         anim = QPropertyAnimation(eff, b"opacity", self)
-        anim.setDuration(240)
+        self._fade_anim = anim
+        anim.setDuration(220)
         anim.setStartValue(0.0)
         anim.setEndValue(1.0)
         anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        anim.finished.connect(lambda: w.setGraphicsEffect(None))
-        anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+
+        def done():
+            if w.graphicsEffect() is eff:
+                w.setGraphicsEffect(None)
+            self._fade_anim = None
+
+        anim.finished.connect(done)
+        anim.start()
 
     def _on_drama_selected(self, drama, *_):
         # 选中剧后跳到链接页,预填剧名并展开手动输入
@@ -2004,11 +2050,40 @@ class MainWindow(QMainWindow):
     def _set_theme(self, mode: str):
         if mode == self.mode:
             return
+        # 切换前抓一帧当前画面,用于交叉淡出过渡
+        snap = None
+        if SETTINGS.value("anim", True, type=bool) and self.isVisible():
+            snap = self.grab()
         self.mode = mode
         SETTINGS.setValue("theme", mode)
         apply_theme(QApplication.instance(), mode)
         self.settings_page.set_theme(mode)
         self._recolor_all()
+        if snap is not None and not snap.isNull():
+            self._theme_fade(snap)
+
+    def _theme_fade(self, snap):
+        """主题切换颜色过渡动画:旧画面遮罩从不透明淡出,露出下方新主题。"""
+        if self._theme_anim is not None:
+            self._theme_anim.stop()
+            self._theme_anim = None
+        overlay = QLabel(self)
+        overlay.setPixmap(snap)
+        overlay.setGeometry(self.rect())
+        overlay.show()
+        overlay.raise_()
+        eff = QGraphicsOpacityEffect(overlay)
+        overlay.setGraphicsEffect(eff)
+        eff.setOpacity(1.0)
+        anim = QVariantAnimation(self)
+        anim.setStartValue(1.0)
+        anim.setEndValue(0.0)
+        anim.setDuration(260)
+        anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        anim.valueChanged.connect(eff.setOpacity)
+        anim.finished.connect(overlay.deleteLater)
+        self._theme_anim = anim
+        anim.start()
 
     def _recolor_all(self):
         # 顶栏图标

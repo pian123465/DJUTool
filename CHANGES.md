@@ -1,3 +1,37 @@
+# v0.8.2 - 修复点击崩溃 / 卡死 + 设置页补全
+
+> 解决双击可运行、但任意点击即崩溃退出;链接解析不再卡界面;设置页补齐主题过渡动画与下载路径。
+
+## 修复:点击即崩溃(打包后进程自动退出)
+
+根因是「无参信号连接了带参 lambda」:`pyqtSignal()` 发信号时 0 个参数,槽函数却声明了 2 个参数,触发 `TypeError`;
+打包成无控制台的 exe 后异常无法输出,Python 直接 Fatal 退出。
+
+- `SearchPage` 海报点击:`lambda _, d=data` → `lambda d=data`
+- `DonePage` 已完成卡点击:`lambda _, t=title` → `lambda t=title`
+- 侧边栏导航点击:`lambda _, k=idx` → `lambda k=idx`
+- 「全部暂停/继续」调用了不存在的 `TaskStore.update_status`(AttributeError)→ 改为 `update_task(id, status=...)`
+- 页面淡入动画:快速连点导航时旧动画引用已被删除的 `QGraphicsOpacityEffect` → 段错误;改为单例动画 + effect 归属校验
+- 搜索编排:`async for` 遍历平台返回的协程(`TypeError: 'async for' requires __aiter__`)→ 兼容协程 / 异步生成器两种返回
+
+## 修复:点一下卡死
+
+- 链接解析原先在 UI 线程同步 `run_until_complete` 跑 aiohttp 网络请求(10s 超时),期间界面完全冻结;
+  改为 `LinkParseWorker(QThread)` 后台解析,解析中按钮置灰,完成信号回主线程刷新,界面始终可点
+
+## 设置页补全
+
+- **主题切换颜色过渡动画**:切换瞬间抓帧,旧画面以不透明度遮罩交叉淡出(260ms InOutCubic),露出下方新主题;可在「设置 → 外观 → 界面动画」关闭
+- **下载路径设置**:设置页「下载 → 保存位置」+「更改」按钮,选择后立即生效并持久化;选择目录已存在时直接使用
+- 设置页「界面动画」「启动时检查更新」开关现在真实读写 QSettings,重启生效
+
+## C++/Qt6 高并发重构
+
+见独立工程 `shortdrama-cpp/`(同目录):QThreadPool 并发下载引擎(1-16 并发)、同款设计 Token 与主题过渡、
+SQLite 任务库、Inno Setup 安装器与 GitHub Actions 全自动构建。
+
+---
+
 # v0.8.1 - UI 全面重设计(App Store 风)
 
 > 按视觉稿 `index.html` 把界面整体重做了一遍:配色、布局、交互全部对齐苹果设计语言。
